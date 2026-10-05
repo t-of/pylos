@@ -162,94 +162,164 @@
   }
 
   // ---- 評価（さいきょう/つよい/ふつう 共通。手持ち差 + 作りかけの正方形 + 動かせる玉の数） ----
+  const W = { hand: 10, threatNow: 10, threatLater: 2, mobile: 4, tempo: 9 };
   function evalState(s) {
     if (s.winner === 0) return 100000;
     if (s.winner === 1) return -100000;
     const occ = occOf(s);
-    let score = (handOf(s, 0) - handOf(s, 1)) * 10;
+    let score = (handOf(s, 0) - handOf(s, 1)) * W.hand;
+    let nowW = 0, nowB = 0;
     for (const sq of SQUARES) {
-      const w = sq.filter((i) => s.white & bit(i)).length;
-      const b = sq.filter((i) => s.black & bit(i)).length;
-      const empty = sq.filter((i) => !(occ & bit(i))).length;
-      if (w === 3 && empty === 1) score += 6;
-      if (b === 3 && empty === 1) score -= 6;
+      let w = 0, b = 0, hole = -1;
+      for (const i of sq) { if (s.white & bit(i)) w++; else if (s.black & bit(i)) b++; else hole = i; }
+      if (w + b !== 3 || (w && b)) continue;
+      const now = canPlace(hole, occ);
+      if (w) { score += now ? W.threatNow : W.threatLater; if (now) nowW++; }
+      else { score -= now ? W.threatNow : W.threatLater; if (now) nowB++; }
     }
+    // 手番側が今すぐ正方形を作れるなら、ほぼ玉 1 個ぶん得
+    if (s.turn === 0 && nowW) score += W.tempo;
+    if (s.turn === 1 && nowB) score -= W.tempo;
     let whiteMobile = 0, blackMobile = 0;
     for (let i = 0; i < 30; i++) {
       if (!isFree(i, occ)) continue;
       if (s.white & bit(i)) whiteMobile++;
       else if (s.black & bit(i)) blackMobile++;
     }
-    score += (whiteMobile - blackMobile) * 1.5;
+    score += (whiteMobile - blackMobile) * W.mobile;
     return score;
   }
 
-  // ---- 探索（反復深化 + ネガマックス + αβ + 置換表） ----
-  function stateKey(s) {
-    // 衝突しない厳密なキー（BigInt）。白 30bit・黒 30bit・手番 1bit。
-    return (BigInt(s.white) << 31n) | (BigInt(s.black) << 1n) | BigInt(s.turn);
+  // ---- 探索（反復深化 PVS + 置換表 + キラー/ヒストリー） ----
+  const MATE = 100000;
+  const TT_BITS = 20, TT_SIZE = 1 << TT_BITS, TT_MASK = TT_SIZE - 1;
+  const ttW = new Int32Array(TT_SIZE), ttB = new Int32Array(TT_SIZE), ttT = new Int8Array(TT_SIZE).fill(-1);
+  const ttDepth = new Int8Array(TT_SIZE), ttFlag = new Int8Array(TT_SIZE), ttScore = new Float64Array(TT_SIZE);
+  const ttMoveA = new Int32Array(TT_SIZE), ttMoveB = new Int32Array(TT_SIZE);
+  const EXACT = 0, LOWER = 1, UPPER = 2;
+  function ttIndex(w, b, t) {
+    let h = Math.imul(w ^ 0x5bd1e995, 0x9e3779b1) ^ Math.imul(b ^ 0x27d4eb2d, 0x85ebca77) ^ t;
+    h ^= h >>> 15; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 13;
+    return h & TT_MASK;
   }
+  function moveA(m) { return m.to | ((m.kind === 'move' ? m.from + 1 : 0) << 5); }
+  function mateScore(ply) { return MATE - ply; }
 
-  function orderMoves(moves, ttMove) {
-    moves.sort((a, b) => {
-      const av = (ttMove && a.to === ttMove.to && a.from === ttMove.from && a.remove === ttMove.remove) ? 1000 : popcount(a.remove) * 10 + (a.win ? 500 : 0);
-      const bv = (ttMove && b.to === ttMove.to && b.from === ttMove.from && b.remove === ttMove.remove) ? 1000 : popcount(b.remove) * 10 + (b.win ? 500 : 0);
-      return bv - av;
-    });
-    return moves;
+  // 探索用の軽い applyMove（手詰まりの判定は親の探索で genMoves が空になったときに行う）。
+  function play(s, m) {
+    const ns = { white: s.white, black: s.black, turn: 1 - s.turn, winner: null };
+    const color = s.turn === 0 ? 'white' : 'black';
+    if (m.kind === 'move') ns[color] &= ~bit(m.from);
+    ns[color] |= bit(m.to);
+    if (m.remove) ns[color] &= ~m.remove;
+    if (m.win || m.to === TOP) ns.winner = s.turn;
+    return ns;
   }
 
   function search(rootState, timeMs, maxDepth) {
-    maxDepth = maxDepth || 40;
+    maxDepth = maxDepth || 60;
     const deadline = Date.now() + timeMs;
-    const tt = new Map(); // key -> { depth, score, move }
-    const perspective = rootState.turn === 0 ? 1 : -1;
+    const killers = [];
+    const history = new Float64Array(32 * 32 * 2);
+    let nodes = 0;
+    const STOP = {};
+    ttT.fill(-1);
 
-    function negamax(s, depth, alpha, beta) {
-      if (s.winner != null) return (s.winner === s.turn ? -1 : 1) * (99000 + depth); // 手番側が負け
+    function orderScore(m, ply, hA, hB) {
+      if (m.win) return 1e9;
+      if (hA >= 0 && moveA(m) === hA && m.remove === hB) return 1e8;
+      let v = popcount(m.remove) * 1e6;
+      const k = killers[ply];
+      if (k && k.some((x) => x && moveA(x) === moveA(m) && x.remove === m.remove)) v += 5e5;
+      if (m.kind === 'move') v += 2e5; // 手持ちを節約する手
+      return v + history[(moveA(m) & 1023) * 2 + (m.remove ? 1 : 0)];
+    }
+
+    function negamax(s, depth, alpha, beta, ply) {
+      if (s.winner != null) return -mateScore(ply); // 直前の手で相手が勝った
+      if ((++nodes & 1023) === 0 && Date.now() > deadline) throw STOP;
       const moves = genMoves(s);
-      if (moves.length === 0) return -(99000 + depth);
-      if (depth === 0) return (s.turn === 0 ? 1 : -1) * evalState(s);
+      if (moves.length === 0) return -mateScore(ply); // 手詰まり＝負け
+      if (depth <= 0) return (s.turn === 0 ? 1 : -1) * evalState(s);
 
-      const key = stateKey(s);
-      const hit = tt.get(key);
-      let ttMove = null;
-      if (hit && hit.depth >= depth) return hit.score;
-      if (hit) ttMove = hit.move;
+      const ti = ttIndex(s.white, s.black, s.turn);
+      let hA = -1, hB = 0;
+      if (ttT[ti] === s.turn && ttW[ti] === s.white && ttB[ti] === s.black) {
+        hA = ttMoveA[ti]; hB = ttMoveB[ti];
+        if (ttDepth[ti] >= depth) {
+          let sc = ttScore[ti];
+          if (sc > MATE - 1000) sc -= ply; else if (sc < -MATE + 1000) sc += ply;
+          const f = ttFlag[ti];
+          if (f === EXACT) return sc;
+          if (f === LOWER && sc >= beta) return sc;
+          if (f === UPPER && sc <= alpha) return sc;
+        }
+      }
 
-      orderMoves(moves, ttMove);
-      let best = -Infinity, bestMove = moves[0];
+      const scores = new Map(moves.map((m) => [m, orderScore(m, ply, hA, hB)]));
+      moves.sort((a, b) => scores.get(b) - scores.get(a));
+      const alpha0 = alpha;
+      let best = -Infinity, bestMove = moves[0], first = true;
       for (const m of moves) {
-        if (Date.now() > deadline) break;
-        const val = -negamax(applyMove(s, m), depth - 1, -beta, -alpha);
+        const child = play(s, m);
+        let val;
+        if (first) val = -negamax(child, depth - 1, -beta, -alpha, ply + 1);
+        else {
+          val = -negamax(child, depth - 1, -alpha - 1, -alpha, ply + 1);
+          if (val > alpha && val < beta) val = -negamax(child, depth - 1, -beta, -alpha, ply + 1);
+        }
+        first = false;
         if (val > best) { best = val; bestMove = m; }
         if (val > alpha) alpha = val;
-        if (alpha >= beta) break;
+        if (alpha >= beta) {
+          if (!m.remove && !m.win) {
+            const k = killers[ply] || (killers[ply] = [null, null]);
+            if (!k[0] || moveA(k[0]) !== moveA(m)) { k[1] = k[0]; k[0] = m; }
+          }
+          history[(moveA(m) & 1023) * 2 + (m.remove ? 1 : 0)] += depth * depth;
+          break;
+        }
       }
-      tt.set(key, { depth, score: best, move: bestMove });
+      let st = best;
+      if (st > MATE - 1000) st += ply; else if (st < -MATE + 1000) st -= ply;
+      ttW[ti] = s.white; ttB[ti] = s.black; ttT[ti] = s.turn; ttDepth[ti] = depth; ttScore[ti] = st;
+      ttFlag[ti] = best <= alpha0 ? UPPER : best >= beta ? LOWER : EXACT;
+      ttMoveA[ti] = moveA(bestMove); ttMoveB[ti] = bestMove.remove;
       return best;
     }
 
     const rootMoves = genMoves(rootState);
     if (rootMoves.length === 0) return null;
     if (rootMoves.length === 1) return rootMoves[0];
+    const win = rootMoves.find((m) => m.win);
+    if (win) return win;
 
     let bestMove = rootMoves[0];
     for (let depth = 1; depth <= maxDepth; depth++) {
-      let alpha = -Infinity, beta = Infinity, localBest = null, localScore = -Infinity;
-      const key = stateKey(rootState);
-      const hit = tt.get(key);
-      orderMoves(rootMoves, hit ? hit.move : null);
-      let timedOut = false;
-      for (const m of rootMoves) {
-        if (Date.now() > deadline) { timedOut = true; break; }
-        const val = -negamax(applyMove(rootState, m), depth - 1, -beta, -alpha);
-        if (val > localScore) { localScore = val; localBest = m; }
-        if (val > alpha) alpha = val;
+      // 前の深さの最善手を先頭に
+      rootMoves.sort((a, b) => (b === bestMove) - (a === bestMove));
+      let alpha = -Infinity, localBest = null, localScore = -Infinity, first = true;
+      try {
+        for (const m of rootMoves) {
+          const child = play(rootState, m);
+          let val;
+          if (first) val = -negamax(child, depth - 1, -Infinity, -alpha, 1);
+          else {
+            val = -negamax(child, depth - 1, -alpha - 1, -alpha, 1);
+            if (val > alpha) val = -negamax(child, depth - 1, -Infinity, -alpha, 1);
+          }
+          first = false;
+          if (val > localScore) { localScore = val; localBest = m; }
+          if (val > alpha) alpha = val;
+        }
+      } catch (e) {
+        if (e !== STOP) throw e;
+        // 途中で時間切れ: この深さで先に読み終えた最善手が前より良ければ使う（先頭は前の最善手なので安全）
+        if (localBest && localScore > -Infinity) bestMove = localBest;
+        break;
       }
-      if (localBest) { bestMove = localBest; tt.set(key, { depth, score: localScore, move: localBest }); }
-      if (timedOut) break;
-      if (Math.abs(localScore) > 90000) break; // 勝敗が見えた
+      bestMove = localBest;
+      if (Math.abs(localScore) > MATE - 1000) break; // 勝敗を読み切った
       if (Date.now() > deadline) break;
     }
     return bestMove;
@@ -267,16 +337,17 @@
 
   function pickByDifficulty(rootState, difficulty) {
     if (difficulty === 'weak') return pickWeak(rootState);
-    if (difficulty === 'normal') return search(rootState, 500, 3);
+    if (difficulty === 'normal') return search(rootState, 500, 2);
     if (difficulty === 'strong') return search(rootState, 300, 40);
     return search(rootState, 2000, 40); // strongest
   }
 
-  return {
+  const api = {
     SIZE, OFFSET, TOP, layerOf, rowOf, colOf, idx,
     initState, cloneState, occOf, ownBB, handOf,
     canPlace, isFree, squareFormedAt, enumerateRemovals,
     genMoves, applyMove, evalState, search,
-    pickWeak, pickByDifficulty,
+    pickWeak, pickByDifficulty, W,
   };
+  return api;
 });
