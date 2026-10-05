@@ -210,6 +210,69 @@ const board = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.36, 4.8), wood(0x6a432
 board.position.y = -0.18;
 scene.add(board);
 
+// ---- 机の天板。盤の下に木の板を敷き、ランプに照らされたようにふちを背景へ溶かす ----
+{
+  const box = new THREE.Box3().setFromObject(board);
+  const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+  const S = 1024, PLANK = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  ['#4b3121', '#432b1c', '#503524', '#472f1f'].forEach((col, i) => {
+    for (let y = i * PLANK; y < S; y += PLANK * 4) {
+      g.save();
+      g.beginPath(); g.rect(0, y, S, PLANK); g.clip();
+      g.fillStyle = col; g.fillRect(0, y, S, PLANK);
+      for (let k = 0; k < 36; k++) { // 木目の線
+        const y0 = y + Math.random() * PLANK, a = 2 + Math.random() * 4, f = 60 + Math.random() * 120;
+        g.strokeStyle = `rgba(24, 12, 4, ${0.06 + Math.random() * 0.14})`;
+        g.lineWidth = 0.5 + Math.random() * 2;
+        g.beginPath();
+        for (let x = 0; x <= S; x += 16) g.lineTo(x, y0 + a * Math.sin(x / f + k));
+        g.stroke();
+      }
+      g.restore();
+      g.fillStyle = 'rgba(0, 0, 0, 0.45)'; g.fillRect(0, y, S, 2); // 板のすき間
+    }
+  });
+  const r = S / 2, inner = (w * 0.62) / (w * 3.2); // 盤の影のあたりまでは濃く、その先で消える
+  const lamp = g.createRadialGradient(r, r, 0, r, r, r);
+  lamp.addColorStop(0, '#000'); lamp.addColorStop(inner, 'rgba(0, 0, 0, 0.9)'); lamp.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  g.globalCompositeOperation = 'destination-in';
+  g.fillStyle = lamp; g.fillRect(0, 0, S, S);
+  g.globalCompositeOperation = 'source-over';
+  // 盤の落とす影
+  const shade = g.createRadialGradient(r, r, 0, r, r, r * 0.48);
+  shade.addColorStop(0, 'rgba(0, 0, 0, 0.55)'); shade.addColorStop(0.55, 'rgba(0, 0, 0, 0.4)'); shade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  g.fillStyle = shade; g.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const table = new THREE.Mesh(new THREE.PlaneGeometry(w * 3.2, w * 3.2),
+    new THREE.MeshStandardMaterial({ map: tex, transparent: true, depthWrite: false, roughness: 0.75, envMapIntensity: 0.4 }));
+  table.rotation.x = -Math.PI / 2;
+  table.position.y = box.min.y - 0.01;
+  table.renderOrder = -1;
+  scene.add(table);
+}
+
+// ホーム画面では盤をゆっくり回して見せる。対局に入ったら最初の向きに戻す（動きを控える設定なら回さない）
+{
+  const HOME_CAM = camera.position.clone();
+  const still = matchMedia('(prefers-reduced-motion: reduce)');
+  let wasHome = false;
+  controls.autoRotateSpeed = 0.6;
+  const spin = () => {
+    const home = !!canvas.offsetParent && !!canvas.closest('.title, #homeBoard');
+    controls.autoRotate = home && !still.matches;
+    if (controls.autoRotate) controls.update(); // change → draw
+    else if (wasHome && !home) { camera.position.copy(HOME_CAM); controls.update(); }
+    wasHome = home;
+    requestAnimationFrame(spin);
+  };
+  requestAnimationFrame(spin);
+}
+
 // 層・行・列から 3D の位置を求める。層0 を基準に、1 つ上の層ほど下 4 個の真ん中へ半マス寄る。
 const BALL_R = 0.42;
 // 上下の層が触れ合う高さ（半マス寄った分の水平距離と球の直径からピタゴラスで求める）
