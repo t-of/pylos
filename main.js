@@ -19,9 +19,17 @@ let state = null;
 let ui = null;
 let vsCpu = true;
 let cpuSide = 1;      // CPU がどちらの色か（0 白 / 1 黒）
+let watching = false; // 観戦中（両方の手番を CPU が打つ）
 let difficulty = 'weak';
 let worker = null;
 let thinking = false;
+
+function isCpuTurn() { return watching || (vsCpu && state.turn === cpuSide); }
+function playerLabel(p) {
+  if (watching) return p === 0 ? 'CPU 1' : 'CPU 2';
+  if (vsCpu) return p === cpuSide ? 'CPU' : 'あなた';
+  return `プレイヤー${p + 1}`;
+}
 
 function bit(i) { return 1 << i; }
 
@@ -110,21 +118,34 @@ function finalizeTurn() {
 // ---- CPU ----
 
 function maybeCpuTurn() {
-  if (state.winner != null || !vsCpu || state.turn !== cpuSide) return;
+  if (state.winner != null || !isCpuTurn()) return;
+  const game = state; // 観戦をやめた・やり直したあとに古い答えが届いても使わない
+  const wait = watching ? 900 : 0; // 観戦中は、目で追えるようにひと呼吸あける
   if (difficulty === 'weak' || difficulty === 'normal') {
-    const m = E.pickByDifficulty(state, difficulty);
-    if (m) state = E.applyMove(state, m);
-    render();
+    const run = () => {
+      if (state !== game) return;
+      const m = E.pickByDifficulty(state, difficulty);
+      if (m) state = E.applyMove(state, m);
+      render();
+      maybeCpuTurn(); // 観戦中は、次も CPU の番なら続けて打つ
+    };
+    if (wait) setTimeout(run, wait); else run();
     return;
   }
   thinking = true;
   render();
   if (!worker) worker = new Worker('./worker.js');
   worker.onmessage = (e) => {
+    if (state !== game) return;
     thinking = false;
     const m = e.data.move;
-    if (m) state = E.applyMove(state, m);
-    render();
+    const apply = () => {
+      if (state !== game) return;
+      if (m) state = E.applyMove(state, m);
+      render();
+      maybeCpuTurn();
+    };
+    if (wait) setTimeout(apply, wait); else apply();
   };
   worker.postMessage({ state: E.cloneState(state), difficulty });
 }
@@ -258,7 +279,7 @@ function syncScene() {
     }
   }
 
-  const myTurn = !vsCpu || state.turn !== cpuSide;
+  const myTurn = !isCpuTurn();
   ballMeshes.forEach((m, i) => {
     const ring = m.userData.ring;
     if (myTurn && ui.phase === 'retrieve' && liftableSet.has(i)) {
@@ -313,7 +334,7 @@ canvas.addEventListener('pointerup', (e) => {
 
 function onTap(e) {
   if (!state || state.winner != null) return;
-  const myTurn = !vsCpu || state.turn !== cpuSide;
+  const myTurn = !isCpuTurn();
   if (!myTurn) return;
   const r = canvas.getBoundingClientRect();
   const ray = new THREE.Raycaster();
@@ -342,7 +363,7 @@ function render() {
   const stage = document.getElementById('stage');
   if (!state) { stage.innerHTML = titleHTML(); bindTitle(); return; }
 
-  const myTurn = !vsCpu || state.turn !== cpuSide;
+  const myTurn = !isCpuTurn();
   liftableSet = new Set(ui.phase === 'retrieve' ? liftableNow() : []);
   movableSet = new Set(ui.phase === 'play' ? movableOwnBalls() : []);
 
@@ -371,6 +392,7 @@ function titleHTML() {
       </div>
       <button class="pill pill--big" data-start="cpu">CPU と対戦</button>
       <button class="pill pill--big" data-start="pvp">2人で対戦（同じ端末）</button>
+      <button class="pill pill--big" data-start="watch">CPU 同士の対戦を見る</button>
       ${rulesHTML()}
     </div>`;
 }
@@ -456,20 +478,22 @@ function bindTitle() {
     });
   });
   document.querySelectorAll('[data-start]').forEach((btn) => {
-    btn.addEventListener('click', () => { vsCpu = btn.dataset.start === 'cpu'; newGame(); });
+    btn.addEventListener('click', () => {
+      watching = btn.dataset.start === 'watch';
+      vsCpu = btn.dataset.start === 'cpu';
+      newGame();
+    });
   });
 }
 
 function gameHTML(myTurn) {
   let status;
   if (state.winner != null) {
-    status = vsCpu
-      ? (state.winner === cpuSide ? 'CPU の勝ち' : 'あなたの勝ち！')
-      : `プレイヤー${state.winner + 1}の勝ち！`;
+    status = `${playerLabel(state.winner)} の勝ち！`;
   } else if (thinking) {
-    status = 'CPU が考え中…';
+    status = `${playerLabel(state.turn)} が考え中…`;
   } else {
-    const turnLabel = vsCpu ? (state.turn === cpuSide ? 'CPU' : 'あなた') : `プレイヤー${state.turn + 1}`;
+    const turnLabel = playerLabel(state.turn);
     status = ui.phase === 'retrieve'
       ? `${turnLabel} の番：正方形ができた。光っている玉をタップで取り戻す（残り${2 - ui.removedCount}個まで）`
       : `${turnLabel} の番：${myTurn ? (ui.sel != null ? '行き先をタップ（もう一度タップで取り消し）' : '空きをタップして置く／自分の玉をタップして動かす') : ''}`;
@@ -478,7 +502,8 @@ function gameHTML(myTurn) {
   const done = (myTurn && ui.phase === 'retrieve' && state.winner == null)
     ? `<button class="pill pill--big" id="doneBtn">おわり（これ以上は取らない）</button>` : '';
   const again = state.winner != null
-    ? `<div class="result"><button class="pill pill--big" data-again>もう一度</button><button class="pill" data-title>モードを選び直す</button></div>` : '';
+    ? `<div class="result"><button class="pill pill--big" data-again>もう一度</button><button class="pill" data-title>モードを選び直す</button></div>`
+    : watching ? `<div class="result"><button class="pill" data-title>見るのをやめる</button></div>` : '';
 
   return `
     <div class="game">
