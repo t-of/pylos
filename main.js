@@ -160,7 +160,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
 scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 2000);
 camera.position.set(0, 6.4, 5.8);
 const controls = new OrbitControls(camera, canvas);
 controls.enablePan = false;
@@ -210,7 +210,7 @@ const board = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.36, 4.8), wood(0x6a432
 board.position.y = -0.18;
 scene.add(board);
 
-// ---- 机の天板。盤の下に木の板を敷き、ランプに照らされたようにふちを背景へ溶かす ----
+// ---- 机の天板。盤の下に木の板を敷き、地平線まで続ける ----
 {
   const box = new THREE.Box3().setFromObject(board);
   const w = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
@@ -235,25 +235,30 @@ scene.add(board);
       g.fillStyle = 'rgba(0, 0, 0, 0.45)'; g.fillRect(0, y, S, 2); // 板のすき間
     }
   });
-  const r = S / 2, inner = (w * 0.62) / (w * 3.2); // 盤の影のあたりまでは濃く、その先で消える
-  const lamp = g.createRadialGradient(r, r, 0, r, r, r);
-  lamp.addColorStop(0, '#000'); lamp.addColorStop(inner, 'rgba(0, 0, 0, 0.9)'); lamp.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  g.globalCompositeOperation = 'destination-in';
-  g.fillStyle = lamp; g.fillRect(0, 0, S, S);
-  g.globalCompositeOperation = 'source-over';
-  // 盤の落とす影
-  const shade = g.createRadialGradient(r, r, 0, r, r, r * 0.48);
-  shade.addColorStop(0, 'rgba(0, 0, 0, 0.55)'); shade.addColorStop(0.55, 'rgba(0, 0, 0, 0.4)'); shade.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  g.fillStyle = shade; g.fillRect(0, 0, S, S);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  const table = new THREE.Mesh(new THREE.PlaneGeometry(w * 3.2, w * 3.2),
-    new THREE.MeshStandardMaterial({ map: tex, transparent: true, depthWrite: false, roughness: 0.75, envMapIntensity: 0.4 }));
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const FAR = 1500; // 地平線まで続いて見える広さ
+  tex.repeat.set(FAR / (w * 3.2), FAR / (w * 3.2));
+  const table = new THREE.Mesh(new THREE.PlaneGeometry(FAR, FAR),
+    new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, envMapIntensity: 0.4 }));
   table.rotation.x = -Math.PI / 2;
   table.position.y = box.min.y - 0.01;
   table.renderOrder = -1;
   scene.add(table);
+  // 盤の落とす影
+  const sc = document.createElement('canvas');
+  sc.width = sc.height = 256;
+  const sg = sc.getContext('2d');
+  const shade = sg.createRadialGradient(128, 128, 0, 128, 128, 128 * 0.48);
+  shade.addColorStop(0, 'rgba(0, 0, 0, 0.55)'); shade.addColorStop(0.55, 'rgba(0, 0, 0, 0.4)'); shade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  sg.fillStyle = shade; sg.fillRect(0, 0, 256, 256);
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(w * 3.2, w * 3.2),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = box.min.y - 0.005;
+  scene.add(shadow);
 }
 
 // ホーム画面では盤をゆっくり回して見せる。対局に入ったら最初の向きに戻す（動きを控える設定なら回さない）
