@@ -261,13 +261,20 @@ const ballMeshes = new Map(); // マス番号 → コマのグループ
 let liftableSet = new Set();
 let movableSet = new Set();
 
-function syncScene() {
-  const occ = E.occOf(state);
+// s: 映す局面（タイトル画面では見本の局面 DEMO）。操作の印は対局中の自分の番だけ出す
+function syncScene(s = state) {
+  const occ = E.occOf(s);
   for (let i = 0; i < 30; i++) {
     const has = occ & bit(i);
+    const colorIdx = s.white & bit(i) ? 0 : 1;
+    // 見本と対局を行き来すると同じマスで色が変わるので、そのときは作り直す
+    if (has && ballMeshes.has(i) && ballMeshes.get(i).userData.color !== colorIdx) {
+      scene.remove(ballMeshes.get(i));
+      ballMeshes.delete(i);
+    }
     if (has && !ballMeshes.has(i)) {
-      const colorIdx = state.white & bit(i) ? 0 : 1;
       const m = pieceMesh(colorIdx);
+      m.userData.color = colorIdx;
       const { x, y, z } = cellWorldPos(i);
       m.position.set(x, y, z);
       m.traverse((o) => { o.userData.cell = i; o.userData.kind = 'ball'; });
@@ -279,12 +286,12 @@ function syncScene() {
     }
   }
 
-  const myTurn = !isCpuTurn();
+  const myTurn = s === state && !isCpuTurn();
   ballMeshes.forEach((m, i) => {
     const ring = m.userData.ring;
     if (myTurn && ui.phase === 'retrieve' && liftableSet.has(i)) {
       ring.visible = true; ring.material.color.setHex(RING_COLOR.liftable); ring.material.opacity = 0.9;
-    } else if (ui.sel === i) {
+    } else if (myTurn && ui.sel === i) {
       ring.visible = true; ring.material.color.setHex(RING_COLOR.sel); ring.material.opacity = 0.9;
     } else if (myTurn && ui.phase === 'play' && movableSet.has(i)) {
       ring.visible = true; ring.material.color.setHex(RING_COLOR.movable); ring.material.opacity = 0.25;
@@ -295,7 +302,7 @@ function syncScene() {
 
   slotMeshes.forEach((m) => scene.remove(m));
   slotMeshes = [];
-  if (myTurn && state.winner == null) {
+  if (myTurn && s.winner == null) {
     const slots = ui.phase === 'play' ? (ui.sel != null ? legalDestinationsFrom(ui.sel) : legalPlacements()) : [];
     for (const i of slots) {
       const { x, y, z } = cellWorldPos(i);
@@ -361,7 +368,13 @@ function onTap(e) {
 
 function render() {
   const stage = document.getElementById('stage');
-  if (!state) { stage.innerHTML = titleHTML(); bindTitle(); return; }
+  if (!state) {
+    stage.innerHTML = titleHTML();
+    document.getElementById('board3d').appendChild(canvas);
+    syncScene(DEMO);
+    bindTitle();
+    return;
+  }
 
   const myTurn = !isCpuTurn();
   liftableSet = new Set(ui.phase === 'retrieve' ? liftableNow() : []);
@@ -373,11 +386,26 @@ function render() {
   bindGame();
 }
 
+// タイトル画面に出す見本の局面（1 段目が埋まり、2 段目を積みはじめたところ）
+const DEMO = (() => {
+  const s = E.initState();
+  [0, 2, 5, 7, 8, 10, 13, 15, 16, 20].forEach((i) => { s.white |= bit(i); });
+  [1, 3, 4, 6, 9, 11, 12, 14, 18].forEach((i) => { s.black |= bit(i); });
+  return s;
+})();
+
 function titleHTML() {
   return `
     <div class="title">
       <h2>pylos</h2>
       <p class="hint">正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにする</p>
+      <div class="preview">
+        <div class="info">
+          <span>手持ち <b>${E.handOf(DEMO, 0)}</b>（白）</span>
+          <span>手持ち <b>${E.handOf(DEMO, 1)}</b>（黒）</span>
+        </div>
+        <div class="board3d" id="board3d"></div>
+      </div>
       <div class="choice" id="startSide">
         <span class="choice__label">先手・後手</span>
         <button class="chip${cpuSide === 1 ? ' is-on' : ''}" data-side="0">自分が先手</button>
@@ -503,10 +531,11 @@ function gameHTML(myTurn) {
     ? `<button class="pill pill--big" id="doneBtn">おわり（これ以上は取らない）</button>` : '';
   const again = state.winner != null
     ? `<div class="result"><button class="pill pill--big" data-again>もう一度</button><button class="pill" data-title>モードを選び直す</button></div>`
-    : watching ? `<div class="result"><button class="pill" data-title>見るのをやめる</button></div>` : '';
+    : '';
 
   return `
     <div class="game">
+      ${state.winner == null ? `<button class="pill game__home" data-title>${watching ? '見るのをやめる' : 'ホームに戻る'}</button>` : ''}
       <div class="info">
         <span>手持ち <b>${E.handOf(state, 0)}</b>（白）</span>
         <span>手持ち <b>${E.handOf(state, 1)}</b>（黒）</span>
@@ -525,7 +554,12 @@ function bindGame() {
   const again = document.querySelector('[data-again]');
   if (again) again.addEventListener('click', () => newGame());
   const title = document.querySelector('[data-title]');
-  if (title) title.addEventListener('click', () => { state = null; render(); });
+  if (title) title.addEventListener('click', () => {
+    // 対局の途中なら、押し間違いで消えないように確かめる
+    if (!watching && state.winner == null && E.occOf(state) && !confirm('対局をやめてホームに戻りますか？')) return;
+    state = null;
+    render();
+  });
 }
 
 render();

@@ -104,3 +104,8 @@ button { font: inherit; color: inherit; }
 .fig__top { fill: rgba(255, 211, 92, 0.6); stroke: #ffd35c; stroke-width: 1.5; }
 .fig__lock { fill: none; stroke: #ff7a6b; stroke-width: 2; stroke-dasharray: 3 2; }
 .fig__arrow { stroke: #ffd35c; stroke-width: 2; }
+
+/* タイトル画面の見本の盤（対局中と同じ見た目） */
+.preview { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.preview .board3d { flex: none; height: 240px; }
+.game__home { align-self: flex-start; }
