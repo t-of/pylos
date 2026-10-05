@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#2b2420">
+  <meta name="theme-color" content="#2d2a26">
   <meta name="description" content="試作 ピロス（ボードゲーム）。4段のピラミッド型の盤に玉を積み、正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにしたら勝ち。">
   <title>pylos — ピラミッド型の陣取り</title>
 
@@ -41,49 +41,7 @@
     </header>
 
     <section class="stage" id="stage">
-      <div id="start" class="screen">
-        <h2 class="title">pylos</h2>
-        <p class="sub">正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにする</p>
-        <div class="choice" id="startSide">
-          <span class="choice__label">先手・後手</span>
-          <button class="chip is-on" data-side="0">自分が先手</button>
-          <button class="chip" data-side="1">自分が後手</button>
-        </div>
-        <div class="choice" id="startDiff">
-          <span class="choice__label">CPU の強さ</span>
-          <button class="chip is-on" data-diff="weak">よわい</button>
-          <button class="chip" data-diff="normal">ふつう</button>
-          <button class="chip" data-diff="strong">つよい</button>
-          <button class="chip" data-diff="strongest">さいきょう</button>
-        </div>
-        <button class="big" data-start="cpu">CPU と対戦</button>
-        <button class="big" data-start="pvp">2人で対戦（同じ端末）</button>
-      </div>
-
-      <div id="game" class="screen" hidden>
-        <div class="info info--top">
-          <span class="info__hand">手持ち <b id="handTop">15</b></span>
-          <span class="info__turn" id="turnLabel"></span>
-        </div>
-
-        <div class="pyramid" id="pyramid"></div>
-
-        <div class="info info--bottom">
-          <span class="info__hand">手持ち <b id="handBottom">15</b></span>
-          <span class="info__hint" id="hint">空きをタップして置く</span>
-        </div>
-
-        <button class="big" id="doneBtn" hidden>おわり（これ以上は取らない）</button>
-      </div>
-
-      <div id="thinking" class="screen overlay" hidden>
-        <p class="sub">CPU が考え中…</p>
-      </div>
-
-      <div id="result" class="screen overlay" hidden>
-        <h2 id="resultText"></h2>
-        <button class="big" id="againBtn">もう一度</button>
-      </div>
+      <!-- ここにゲーム本体 -->
     </section>
 
     <footer class="credit">
@@ -93,6 +51,14 @@
 
   <script src="./webapp-kit/webapp-kit.js"></script>
   <script src="./engine.js"></script>
-  <script src="./main.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./main.js"></script>
 </body>
 </html>
