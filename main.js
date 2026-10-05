@@ -69,7 +69,7 @@ function movableOwnBalls() {
 function commit(action) {
   // action: { kind: 'place'|'move', from?, to }
   const color = state.turn === 0 ? 'white' : 'black';
-  if (action.kind === 'move') state[color] &= ~bit(action.from);
+  if (action.kind === 'move') { state[color] &= ~bit(action.from); moveFrom = action.from; }
   state[color] |= bit(action.to);
   ui.sel = null;
 
@@ -125,7 +125,7 @@ function maybeCpuTurn() {
     const run = () => {
       if (state !== game) return;
       const m = E.pickByDifficulty(state, difficulty);
-      if (m) state = E.applyMove(state, m);
+      if (m) { state = E.applyMove(state, m); moveFrom = m.from ?? null; }
       render();
       maybeCpuTurn(); // 観戦中は、次も CPU の番なら続けて打つ
     };
@@ -141,7 +141,7 @@ function maybeCpuTurn() {
     const m = e.data.move;
     const apply = () => {
       if (state !== game) return;
-      if (m) state = E.applyMove(state, m);
+      if (m) { state = E.applyMove(state, m); moveFrom = m.from ?? null; }
       render();
       maybeCpuTurn();
     };
@@ -206,7 +206,26 @@ const wood = (color, o = {}) => new THREE.MeshPhysicalMaterial({
   color, map: GRAIN, roughness: 0.5, clearcoat: 0.35, clearcoatRoughness: 0.35, envMapIntensity: 0.7, side: THREE.DoubleSide, ...o,
 });
 
-const board = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.36, 4.8), wood(0x6a4329, { clearcoat: 0.5 }));
+// 玉は直径 1（マスの間隔と同じ）なので、隣どうし・上下の層どうしがぴったり触れ合う
+const BALL_R = 0.5;
+// 層0 の 16 マスは、盤に玉と同じ半径の球面の窪みを DIMPLE の深さで掘る。玉はその窪みにはまる
+const DIMPLE = 0.16;
+const DIMPLE_RIM = Math.sqrt(BALL_R ** 2 - (BALL_R - DIMPLE) ** 2);
+// 盤の上面を細かく割り、マスの近くの頂点を球面に沿って下げる
+const boardGeo = new THREE.BoxGeometry(4.8, 0.36, 4.8, 192, 1, 192);
+{
+  const pos = boardGeo.attributes.position;
+  for (let k = 0; k < pos.count; k++) {
+    if (pos.getY(k) < 0.17) continue;
+    const x = pos.getX(k), z = pos.getZ(k);
+    const cx = Math.min(3, Math.max(0, Math.round(x + 1.5))) - 1.5;
+    const cz = Math.min(3, Math.max(0, Math.round(z + 1.5))) - 1.5;
+    const rho = Math.hypot(x - cx, z - cz);
+    if (rho < DIMPLE_RIM) pos.setY(k, pos.getY(k) - (Math.sqrt(BALL_R ** 2 - rho ** 2) - (BALL_R - DIMPLE)));
+  }
+  boardGeo.computeVertexNormals();
+}
+const board = new THREE.Mesh(boardGeo, wood(0x6a4329, { clearcoat: 0.5 }));
 board.position.y = -0.18;
 scene.add(board);
 
@@ -280,59 +299,104 @@ scene.add(DESK);
 }
 
 // 層・行・列から 3D の位置を求める。層0 を基準に、1 つ上の層ほど下 4 個の真ん中へ半マス寄る。
-const BALL_R = 0.42;
 // 上下の層が触れ合う高さ（半マス寄った分の水平距離と球の直径からピタゴラスで求める）
 const H_STEP = Math.sqrt((2 * BALL_R) ** 2 - 0.5);
 function cellWorldPos(i) {
   const layer = E.layerOf(i), r = E.rowOf(i), c = E.colOf(i), size = E.SIZE[layer];
-  return { x: c - (size - 1) / 2, y: BALL_R + layer * H_STEP, z: r - (size - 1) / 2 };
+  return { x: c - (size - 1) / 2, y: BALL_R - DIMPLE + layer * H_STEP, z: r - (size - 1) / 2 };
 }
-
-// 層0 の 16 個は、盤に窪み（溝）を掘って玉の置き場所を示す
-const CELL_COLOR = { base: 0x4a2e1c, open: 0xb08a3a };
-const cellGeo = new THREE.CircleGeometry(0.42, 40);
-const grooveGeo = new THREE.RingGeometry(0.42, 0.47, 40);
-const GROOVE = new THREE.MeshStandardMaterial({ color: 0x24160d, roughness: 0.9 });
-const cellMeshes = [...Array(16).keys()].map((i) => {
-  const m = new THREE.Mesh(cellGeo, wood(CELL_COLOR.base, { roughness: 0.7, clearcoat: 0 }));
-  m.rotation.x = -Math.PI / 2;
-  const { x, z } = cellWorldPos(i);
-  m.position.set(x, 0.004, z);
-  const ring = new THREE.Mesh(grooveGeo, GROOVE);
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.set(x, 0.003, z);
-  scene.add(m, ring);
-  return m;
-});
 
 const WOOD = [wood(0xead3a8), wood(0x5a3820)]; // 白(明るい木) / 黒(暗い木)
-const ballGeo = new THREE.SphereGeometry(BALL_R, 32, 24);
-const ringGeo = new THREE.RingGeometry(BALL_R * 1.05, BALL_R * 1.3, 32);
-const RING_COLOR = { sel: 0xffd35c, liftable: 0x78dc8c, movable: 0xffffff };
+const ballGeo = new THREE.SphereGeometry(BALL_R, 40, 28);
+// 操作できる玉は、色をにじませて示す（玉どうしが触れているので足元の輪は隠れて見えない）
+const GLOW = { sel: [0xffd35c, 0.55], liftable: [0x78dc8c, 0.5], movable: [0xffffff, 0.12] };
 
 function pieceMesh(colorIdx) {
-  const g = new THREE.Group();
-  g.add(new THREE.Mesh(ballGeo, WOOD[colorIdx]));
-  const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: RING_COLOR.movable, transparent: true, opacity: 0, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = -BALL_R + 0.01;
-  ring.visible = false;
-  g.add(ring);
-  g.userData.ring = ring;
-  return g;
+  const m = new THREE.Mesh(ballGeo, WOOD[colorIdx].clone());
+  m.material.emissive = new THREE.Color(0);
+  return m;
 }
 
-const SLOT_MAT = new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
-const slotGeo = new THREE.CircleGeometry(BALL_R * 0.85, 32);
+// 置ける場所は、半透明の玉で示す
+const SLOT_MAT = new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.32, depthWrite: false });
 let slotMeshes = [];
 
-const ballMeshes = new Map(); // マス番号 → コマのグループ
+const ballMeshes = new Map(); // マス番号 → コマ
 let liftableSet = new Set();
 let movableSet = new Set();
 
+// ---- 動き。置いた玉は落ちて弾み、動かした玉は弧を描いて移り、取り戻した玉は持ち上がって消える ----
+const GRAVITY = 30;      // 重力の強さ（1 マス = 1 として）
+const RESTITUTION = 0.3; // 弾むときに残る速さの割合
+const anims = new Set();
+let lastSynced = null;
+let moveFrom = null; // 直前の手で動かした玉の元のマス（動きの見分けに使う）
+let animating = false;
+function tick() {
+  const now = performance.now();
+  for (const a of anims) if (a.step(now)) anims.delete(a);
+  draw();
+  if (anims.size) requestAnimationFrame(tick); else animating = false;
+}
+function animate(a) {
+  anims.add(a);
+  if (!animating) { animating = true; requestAnimationFrame(tick); }
+}
+// 着地の弾み。v0 の下向きの速さで target に届いたところから、弾みが小さくなるまで
+function bounce(m, target, v0, t0) {
+  let y = target, v = v0 * RESTITUTION, last = t0;
+  return (now) => {
+    const dt = Math.min(0.033, (now - last) / 1000); last = now;
+    v -= GRAVITY * dt; y += v * dt;
+    if (y <= target) { y = target; v = -v * RESTITUTION; if (v < 0.4) { m.position.y = target; return true; } }
+    m.position.y = y;
+    return false;
+  };
+}
+function dropIn(m, to) {
+  const h = 2.2, t0 = performance.now(), T = Math.sqrt((2 * h) / GRAVITY);
+  m.position.set(to.x, to.y + h, to.z);
+  let land = null;
+  animate({ step(now) {
+    if (land) return land(now);
+    const t = (now - t0) / 1000;
+    if (t < T) { m.position.y = to.y + h - 0.5 * GRAVITY * t * t; return false; }
+    land = bounce(m, to.y, GRAVITY * T, now);
+    return land(now);
+  } });
+}
+function moveArc(m, from, to) {
+  const t0 = performance.now(), T = 0.55, lift = 1.2 + Math.max(0, to.y - from.y);
+  let land = null;
+  animate({ step(now) {
+    if (land) return land(now);
+    const u = Math.min(1, (now - t0) / 1000 / T);
+    m.position.set(from.x + (to.x - from.x) * u, from.y + (to.y - from.y) * u + lift * 4 * u * (1 - u), from.z + (to.z - from.z) * u);
+    if (u < 1) return false;
+    land = bounce(m, to.y, (4 * lift) / T, now); // 弧の終わりの下向きの速さで着地する
+    return land(now);
+  } });
+}
+function liftOut(m) {
+  const t0 = performance.now(), y0 = m.position.y;
+  m.material.transparent = true;
+  animate({ step(now) {
+    const u = Math.min(1, (now - t0) / 450);
+    m.position.y = y0 + 1.6 * u * u;
+    m.material.opacity = 1 - u;
+    if (u < 1) return false;
+    scene.remove(m);
+    return true;
+  } });
+}
+
 // s: 映す局面（タイトル画面では見本の局面 DEMO）。操作の印は対局中の自分の番だけ出す
 function syncScene(s = state) {
+  // 対局の続きのときだけ動かす（見本と対局の切り替えでは動かさない）
+  const live = s !== DEMO && lastSynced != null && lastSynced !== DEMO;
+  lastSynced = s;
   const occ = E.occOf(s);
+  const gone = [], added = [];
   for (let i = 0; i < 30; i++) {
     const has = occ & bit(i);
     const colorIdx = s.white & bit(i) ? 0 : 1;
@@ -343,30 +407,39 @@ function syncScene(s = state) {
     }
     if (has && !ballMeshes.has(i)) {
       const m = pieceMesh(colorIdx);
-      m.userData.color = colorIdx;
-      const { x, y, z } = cellWorldPos(i);
-      m.position.set(x, y, z);
-      m.traverse((o) => { o.userData.cell = i; o.userData.kind = 'ball'; });
+      m.userData = { color: colorIdx, cell: i, kind: 'ball' };
+      const to = cellWorldPos(i);
+      m.position.set(to.x, to.y, to.z);
       scene.add(m);
       ballMeshes.set(i, m);
+      added.push(m);
     } else if (!has && ballMeshes.has(i)) {
-      scene.remove(ballMeshes.get(i));
+      gone.push(ballMeshes.get(i));
       ballMeshes.delete(i);
     }
   }
+  if (live) {
+    for (const m of added) {
+      const k = gone.findIndex((g) => g.userData.cell === moveFrom);
+      const to = cellWorldPos(m.userData.cell);
+      if (k >= 0) {
+        const [g] = gone.splice(k, 1);
+        scene.remove(g);
+        moveArc(m, g.position.clone(), to);
+      } else dropIn(m, to);
+    }
+    gone.forEach(liftOut);
+  } else gone.forEach((g) => scene.remove(g));
+  moveFrom = null;
 
   const myTurn = s === state && !isCpuTurn();
   ballMeshes.forEach((m, i) => {
-    const ring = m.userData.ring;
-    if (myTurn && ui.phase === 'retrieve' && liftableSet.has(i)) {
-      ring.visible = true; ring.material.color.setHex(RING_COLOR.liftable); ring.material.opacity = 0.9;
-    } else if (myTurn && ui.sel === i) {
-      ring.visible = true; ring.material.color.setHex(RING_COLOR.sel); ring.material.opacity = 0.9;
-    } else if (myTurn && ui.phase === 'play' && movableSet.has(i)) {
-      ring.visible = true; ring.material.color.setHex(RING_COLOR.movable); ring.material.opacity = 0.25;
-    } else {
-      ring.visible = false;
-    }
+    let glow = null;
+    if (myTurn && ui.phase === 'retrieve' && liftableSet.has(i)) glow = GLOW.liftable;
+    else if (myTurn && ui.sel === i) glow = GLOW.sel;
+    else if (myTurn && ui.phase === 'play' && movableSet.has(i)) glow = GLOW.movable;
+    m.material.emissive.setHex(glow ? glow[0] : 0);
+    m.material.emissiveIntensity = glow ? glow[1] : 0;
   });
 
   slotMeshes.forEach((m) => scene.remove(m));
@@ -375,11 +448,10 @@ function syncScene(s = state) {
     const slots = ui.phase === 'play' ? (ui.sel != null ? legalDestinationsFrom(ui.sel) : legalPlacements()) : [];
     for (const i of slots) {
       const { x, y, z } = cellWorldPos(i);
-      const m = new THREE.Mesh(slotGeo, SLOT_MAT);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(x, y - BALL_R + 0.01, z);
-      m.userData.cell = i;
-      m.userData.kind = 'slot';
+      const m = new THREE.Mesh(ballGeo, SLOT_MAT);
+      m.scale.setScalar(0.92);
+      m.position.set(x, y, z);
+      m.userData = { cell: i, kind: 'slot' };
       scene.add(m);
       slotMeshes.push(m);
     }
