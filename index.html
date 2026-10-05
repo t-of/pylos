@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2b2420">
+  <meta name="description" content="試作 ピロス（ボードゲーム）。4段のピラミッド型の盤に玉を積み、正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにしたら勝ち。">
+  <title>pylos — ピラミッド型の陣取り</title>
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="pylos">
+  <meta property="og:title" content="pylos — ピラミッド型の陣取り">
+  <meta property="og:description" content="試作 ピロス（ボードゲーム）。4段のピラミッド型の盤に玉を積み、正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにしたら勝ち。">
+  <meta property="og:url" content="https://t-of.github.io/pylos/">
+  <meta property="og:image" content="https://t-of.github.io/pylos/icons/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="ja_JP">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <!-- apple-mobile-web-app-status-bar-style は付けない（black-translucent だと iOS 26 で上部が隠れる） -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="pylos">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="./webapp-kit/webapp-kit.css">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="bar">
+      <h1 class="bar__title">pylos</h1>
+      <div class="bar__actions">
+        <button class="pill" data-wak="install" hidden>アプリにする</button>
+        <button class="pill" data-wak="share">共有</button>
+      </div>
+    </header>
+
+    <section class="stage" id="stage">
+      <div id="start" class="screen">
+        <h2 class="title">pylos</h2>
+        <p class="sub">正方形を作って玉を取り戻し、頂上を取るか相手を手詰まりにする</p>
+        <div class="choice" id="startSide">
+          <span class="choice__label">先手・後手</span>
+          <button class="chip is-on" data-side="0">自分が先手</button>
+          <button class="chip" data-side="1">自分が後手</button>
+        </div>
+        <div class="choice" id="startDiff">
+          <span class="choice__label">CPU の強さ</span>
+          <button class="chip is-on" data-diff="weak">よわい</button>
+          <button class="chip" data-diff="normal">ふつう</button>
+          <button class="chip" data-diff="strong">つよい</button>
+          <button class="chip" data-diff="strongest">さいきょう</button>
+        </div>
+        <button class="big" data-start="cpu">CPU と対戦</button>
+        <button class="big" data-start="pvp">2人で対戦（同じ端末）</button>
+      </div>
+
+      <div id="game" class="screen" hidden>
+        <div class="info info--top">
+          <span class="info__hand">手持ち <b id="handTop">15</b></span>
+          <span class="info__turn" id="turnLabel"></span>
+        </div>
+
+        <div class="pyramid" id="pyramid"></div>
+
+        <div class="info info--bottom">
+          <span class="info__hand">手持ち <b id="handBottom">15</b></span>
+          <span class="info__hint" id="hint">空きをタップして置く</span>
+        </div>
+
+        <button class="big" id="doneBtn" hidden>おわり（これ以上は取らない）</button>
+      </div>
+
+      <div id="thinking" class="screen overlay" hidden>
+        <p class="sub">CPU が考え中…</p>
+      </div>
+
+      <div id="result" class="screen overlay" hidden>
+        <h2 id="resultText"></h2>
+        <button class="big" id="againBtn">もう一度</button>
+      </div>
+    </section>
+
+    <footer class="credit">
+      <a href="/">T.OF...</a> ／ <a href="https://t-of.github.io/contact/">問い合わせ</a>
+    </footer>
+  </main>
+
+  <script src="./webapp-kit/webapp-kit.js"></script>
+  <script src="./engine.js"></script>
+  <script src="./main.js"></script>
+</body>
+</html>
