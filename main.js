@@ -371,7 +371,76 @@ function titleHTML() {
       </div>
       <button class="pill pill--big" data-start="cpu">CPU と対戦</button>
       <button class="pill pill--big" data-start="pvp">2人で対戦（同じ端末）</button>
+      ${rulesHTML()}
     </div>`;
+}
+
+// ---- ルール説明の図 ----
+const FU = 24; // 図の 1 マスの大きさ
+function figBall(x, y, k) {
+  return `<circle class="fig__${k}" cx="${x}" cy="${y}" r="${FU * 0.45}"/>`;
+}
+// 上から見た盤。n: 見せるマスの数（n×n）。balls: [段, 行, 列, 種類]。種類は w 白 / b 黒 / slot 置ける所 / lock 動かせない印。
+// arrow: [[段, 行, 列], [段, 行, 列]] を結ぶ矢印。
+function figTop(n, balls, arrow) {
+  const pos = (l, r, c) => [4 + (c + 0.5 + l * 0.5) * FU, 4 + (r + 0.5 + l * 0.5) * FU];
+  const w = n * FU + 8;
+  let svg = `<rect class="fig__board" width="${w}" height="${w}" rx="6"/>`;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) svg += `<circle class="fig__hole" cx="${pos(0, r, c)[0]}" cy="${pos(0, r, c)[1]}" r="${FU * 0.3}"/>`;
+  svg += balls.map(([l, r, c, k]) => figBall(...pos(l, r, c), k)).join('');
+  if (arrow) {
+    const [a, b] = arrow.map((p) => pos(...p));
+    svg += `<line class="fig__arrow" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" marker-end="url(#figArrow)"/>`;
+  }
+  return `<svg class="fig" viewBox="0 0 ${w} ${w}" width="${w * 1.5}" aria-hidden="true">${svg}</svg>`;
+}
+// 横から見た盤。balls: [段, 列, 種類]。
+function figSide(n, balls) {
+  const w = n * FU + 8, h = 4 * FU * 0.8 + 18;
+  const pos = (l, c) => [4 + (c + 0.5 + l * 0.5) * FU, h - 10 - FU * 0.45 - l * FU * 0.8];
+  let svg = `<rect class="fig__board" y="${h - 10}" width="${w}" height="10" rx="3"/>`;
+  svg += balls.map(([l, c, k]) => figBall(...pos(l, c), k)).join('');
+  return `<svg class="fig" viewBox="0 0 ${w} ${h}" width="${w * 1.5}" aria-hidden="true">${svg}</svg>`;
+}
+function figItem(svg, text) {
+  return `<figure class="figs__item">${svg}<figcaption>${text}</figcaption></figure>`;
+}
+
+function rulesHTML() {
+  const pyramid = [];
+  for (let l = 0; l < 4; l++) for (let c = 0; c < 4 - l; c++) pyramid.push([l, c, l === 3 ? 'top' : 'slot']);
+  return `
+    <details class="rules">
+      <summary>ルール</summary>
+      <svg width="0" height="0" style="position:absolute"><defs><marker id="figArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#ffd35c"/></marker></defs></svg>
+      <h3>1. 盤と玉</h3>
+      <div class="figs">
+        ${figItem(figSide(4, pyramid), '4×4 の上に 3×3、2×2、頂上の 1 マスと積む 4 段のピラミッド。玉は白・黒 15 個ずつ。白が先手')}
+      </div>
+      <h3>2. 置く</h3>
+      <div class="figs">
+        ${figItem(figTop(2, [[0, 0, 0, 'w'], [0, 0, 1, 'b'], [0, 1, 0, 'b'], [0, 1, 1, 'w'], [1, 0, 0, 'slot']]), '自分の番に手持ちの玉を 1 個置く。2 段目からは、下の 4 つがそろった真ん中に置ける（色は関係ない）')}
+      </div>
+      <h3>3. 正方形で取り戻す</h3>
+      <div class="figs">
+        ${figItem(figTop(2, [[0, 0, 0, 'w'], [0, 0, 1, 'w'], [0, 1, 0, 'w'], [0, 1, 1, 'w']]), '○ 自分の色だけで 2×2 の正方形を作ったら、自分の玉を 1〜2 個盤から取って手持ちに戻せる（取らなくてもよい）')}
+        ${figItem(figTop(2, [[0, 0, 0, 'w'], [0, 0, 1, 'w'], [0, 1, 0, 'b'], [0, 1, 1, 'w']]), '× 色が混ざると正方形にならない')}
+      </div>
+      <h3>4. 上の段へ動かす</h3>
+      <div class="figs">
+        ${figItem(figTop(3, [[0, 0, 0, 'b'], [0, 0, 1, 'w'], [0, 1, 0, 'w'], [0, 1, 1, 'b'], [0, 2, 2, 'w'], [1, 0, 0, 'slot']], [[0, 2, 2], [1, 0, 0]]), '置く代わりに、盤の上の自分の玉を 1 段以上上へ動かしてもよい。手持ちが 1 個浮く')}
+      </div>
+      <h3>5. 支えている玉は動かせない</h3>
+      <div class="figs">
+        ${figItem(figSide(3, [[0, 0, 'w'], [0, 1, 'b'], [0, 2, 'w'], [1, 0, 'b'], [0, 0, 'lock'], [0, 1, 'lock']]), '上に玉が乗っている玉（赤い点線）は、動かすことも取り戻すこともできない')}
+      </div>
+      <h3>6. 勝ち負け</h3>
+      <ul>
+        <li>頂上に玉を置いた人の勝ち。</li>
+        <li>自分の番に置くことも動かすこともできなくなったら負け（手持ちを使い切ると起きる）。</li>
+        <li>手持ちを節約するのがコツ。正方形を作り、上へ動かして、相手より玉を残す。</li>
+      </ul>
+    </details>`;
 }
 function bindTitle() {
   document.querySelectorAll('[data-side]').forEach((btn) => {
